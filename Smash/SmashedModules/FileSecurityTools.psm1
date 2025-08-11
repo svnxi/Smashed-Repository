@@ -27,7 +27,7 @@ function Write-CustomLog {
 
     $hasMessage = -not [string]::IsNullOrEmpty($Message)
     $hasPrompt = -not [string]::IsNullOrEmpty($Prompt)
-    $didMessage = $false
+    # $didMessage = $false
 
     switch ($LogType) {
         HOST { if($hasPrompt){ Write-Host $Prompt -ForegroundColor Green}}
@@ -46,7 +46,7 @@ function Write-CustomLog {
         if(-not [string]::IsNullOrEmpty($Path)) {
             try { 
                 Add-Content -Path $Path -Value $Message 
-                $didMessage = $true
+                # $didMessage = $true
             }
             catch {
                 Write-Warning "[PATH] Failed to document log: $($_.Exception.Message)"
