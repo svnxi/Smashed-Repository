@@ -1,4 +1,9 @@
 # AESCryptoHelper.psm1
+Add-Type -AssemblyName System.Security
+if ($IsWindows -eq $false) {
+    throw "DPAPI is only supported on Windows. This module requires Windows OS."
+}
+
 
 # Interface workaround uses a base class inheritance instead
 # Linter doesn't pick up the reference so workaround using module member export instead
@@ -47,8 +52,13 @@ class AESCryptoHelper : CryptoHelperBase {
     # DPAPI compliant persistence method protects and saves key-IV pair to destination.
     [void] DPAPISave([string]$destinationPath) {
         # Protect key and IV using DPAPI (CurrentUser scope)
-        $protectedKey = [System.Security.Cryptography.ProtectedData]::Protect($this.Key, $null, 'CurrentUser')
-        $protectedIV = [System.Security.Cryptography.ProtectedData]::Protect($this.IV, $null, 'CurrentUser')
+        try{
+            $protectedKey = [System.Security.Cryptography.ProtectedData]::Protect($this.Key, $null, 'CurrentUser')
+            $protectedIV = [System.Security.Cryptography.ProtectedData]::Protect($this.IV, $null, 'CurrentUser')
+        }
+        catch{
+            throw "Failed to protect AES key or iv: $_"
+        }
 
         # Save protected key and IV to disk
         [System.IO.File]::WriteAllBytes($destinationPath+"\aes_key_protected.bin", $protectedKey)
@@ -79,4 +89,5 @@ class AESCryptoHelper : CryptoHelperBase {
     }
 }
 
-Export-ModuleMember -Function * -Alias * -Variable * -Cmdlet * -Class AESCryptoHelper
+# Exporting AESCryptoHelper for external use
+Export-ModuleMember -Class AESCryptoHelper

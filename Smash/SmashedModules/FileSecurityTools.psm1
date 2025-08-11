@@ -1,99 +1,10 @@
 # File: FileSecurityTools.psm1
-Import-Module AESCryptoHelper
-
-function Protect-FolderAES {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$UploadPath,
-        [Parameter(Mandatory=$true)]
-        [string]$PathToTokens
-    )
-
-    # Prepare new log folder if not found
-    $logFolder = Join-Path $PathToTokens "Logs"
-    if (-not (Test-Path $logFolder)) { New-Item -Path $logFolder -ItemType Directory | Out-Null }
-
-    # Prepare log file path names
-    $errorLog = Join-Path $logFolder "error.log"
-    $encryptionLog = Join-Path $logFolder "encryption.log"
-
-    # Collect all contents of Smashed directory
-    $uploads = Get-ChildItem -Path $UploadPath -File
-
-    # Additional documentation for extensibility
-    $skippedFiles = @()
-    $encryptedFiles = @()
-
-    foreach($document in $uploads){
-        # Skip unsupported file types
-        if ($document.Extension.ToLower() -notin @(".txt", ".csv", ".log", ".xml", ".json", ".html", ".htm", ".md", ".yaml", ".yml", ".ini", ".conf", ".java", ".py", ".js", ".cpp", ".c", ".cs", ".sh", ".ps1", ".bat", ".tsv", ".rtf", ".doc", ".docx")) {
-            $prompt = "[WARNING] Skipping unsupported file type: $($document.Name)"
-            $log = $prompt
-            Write-CustomLog -LogType WARNING -Prompt $prompt -Path $errorLog -Message $log
-
-            $skippedFiles += [PSCustomObject]@{
-                FileName = $document.FullName
-                Why = $log
-            }
-
-            continue
-        }
-
-        # Prepare new destination folder for token storage
-        $folderName = $document.Name -replace '[^a-zA-Z0-9_\-\.]', '_'
-        $tokenPath = Join-Path $PathToTokens $folderName
-        if (-not (Test-Path $tokenPath)) { New-Item -Path $tokenPath -ItemType Directory | Out-Null }
-            
-        # Read uploaded document
-        $Contents = Get-Content -Path $document.FullName -Raw
-        $byteContents = [System.Text.Encoding]::UTF8.GetBytes($Contents)
-        
-        # Generate and secure AES-256 compliant Key and IV
-        try {
-            $keyMaterial = [AESCryptoHelper]::new()
-            $keyMaterial.DPAPISave($tokenPath)
-        } catch {
-            $prompt = "[ERROR] Failed to generate key for $($document.Name): $_"
-            $log = $prompt
-            Write-CustomLog -LogType ERROR -Prompt $prompt -Path $errorLog -Message $log
-
-            $skippedFiles += [PSCustomObject]@{
-                FileName = $document.FullName
-                Why = $log
-            }
-
-            continue
-        }
-
-        # Encrypt contents
-        try { $encrypted = $keyMaterial.Encrypt($byteContents) } 
-        catch {
-            $prompt = "[ERROR] Failed to encrypt $($document.Name): $_"
-            Write-CustomLog -LogType ERROR -Prompt $prompt
-            continue
-        }
-
-        # Save encrypted version to .crypt
-        $cryptFate = Join-Path $UploadPath ".crypt"
-        if (-not (Test-Path $cryptFate)) { New-Item -Path $cryptFate -ItemType Directory | Out-Null }
-
-        $destFile = Join-Path $cryptFate $document.Name
-        [System.IO.File]::WriteAllText($destFile, [Convert]::ToBase64String($encrypted))
-
-        # Log successful output
-        $prompt = "[SUCCESS] Encrypted $($document.Name) to $cryptFate"
-        $log = "[SUCCESS] Encrypted $($document.Name)"
-        Write-CustomLog -LogType HOST -Prompt $prompt -Path $encryptionLog -Message $log
-
-        $encryptedFiles += [PSCustomObject]@{
-            OriginalFile = $document.FullName
-            EncryptedFile = $destFile
-            TokenPath = $tokenPath
-        }
-    }
-
-    return $encryptedFiles
+if (-not (Get-Module -ListAvailable -Name AESCryptoHelper)) {
+    Write-Error "Required module 'AESCryptoHelper' is not available."
+    return
 }
+
+Import-Module AESCryptoHelper
 
 enum LogType {
     HOST = 0
@@ -104,8 +15,8 @@ enum LogType {
 }
 
 function Write-CustomLog {
+    [CmdletBinding()]
     param (
-        [Parameter(Mandatory=$true)]
         [LogType]$LogType,
         [string]$Prompt="",
         [string[]]$Tags=@("General"),
@@ -138,7 +49,7 @@ function Write-CustomLog {
                 $didMessage = $true
             }
             catch {
-                Write-Warning "Failed to document log: $($_.Exception.Message)"
+                Write-Warning "[PATH] Failed to document log: $($_.Exception.Message)"
             }
         } 
         else {
@@ -146,8 +57,145 @@ function Write-CustomLog {
             Write-Warning "You intend to write contents with an invalid path."
         }
     }
-
-    return ($hasPrompt -or $didMessage)
 }
 
-Export-ModuleMember -Function Protect-FolderAES, Write-CustomLog
+function Confirm-SupportedFileType {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Extension
+    )
+
+    $supported = @(".txt", ".csv", ".log", ".xml", ".json", ".html", ".htm", ".md", ".yaml", ".yml", ".ini", ".conf", ".java", ".py", ".js", ".cpp", ".c", ".cs", ".sh", ".ps1", ".bat", ".tsv", ".rtf", ".doc", ".docx")
+    return $supported -contains $Extension.ToLower()
+}
+
+function Get-SmashedFiles {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$DirectoryPath,
+        [int]$Limit=5
+    )
+
+    $uploads = Get-ChildItem -Path $DirectoryPath -File
+    if($uploads.Length -gt $Limit) {
+        $prompt = "You can upload a maximum of $Limit files."
+        Write-CustomLog -LogType WARNING -Prompt $prompt
+        return @()
+    }
+
+    return $uploads
+}
+
+function Protect-FolderAES {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateScript({ Test-Path $_ })]
+        [string]$UploadPath,
+        [Parameter(Mandatory=$true)]
+        [ValidateScript({ Test-Path $_ })]
+        [string]$PathToTokens,
+        [Parameter()]
+        [int]$MaxFiles = 10
+    )
+
+    # Prepare new log folder if not found
+    $logFolder = Join-Path $PathToTokens "Logs"
+    if (-not (Test-Path $logFolder)) { New-Item -Path $logFolder -ItemType Directory | Out-Null }
+
+    # Prepare log file path names
+    $errorLog = Join-Path $logFolder "error.log"
+    $successLog = Join-Path $logFolder "success.log"
+
+    # Collect all contents of Smashed directory (validate if null or empty)
+    $uploads = Get-SmashedFiles -DirectoryPath $UploadPath -Limit $MaxFiles
+    if(-not $uploads -or $uploads.Count -eq 0) { return } 
+
+    # Save additional documentation for extensibility
+    $skippedFiles = @()
+    $encryptedFiles = @()
+
+    foreach($document in $uploads){
+        # Skip unsupported file types
+        if (-not (Confirm-SupportedFileType -Extension $document.Extension)) {
+            $prompt = "[WARNING] Skipping unsupported file type: $($document.Name)"
+            $log = $prompt
+            Write-CustomLog -LogType WARNING -Prompt $prompt -Path $errorLog -Message $log
+
+            $skippedFiles += [PSCustomObject]@{
+                FileName = $document.FullName
+                Why = "Unsupported Type"
+            }
+
+            continue
+        }
+
+        # Prepare new destination folder for token storage
+        $folderName = $document.Name -replace '[^a-zA-Z0-9_\-\.]', '_'
+        $tokenPath = Join-Path $PathToTokens $folderName
+        if (-not (Test-Path $tokenPath)) { New-Item -Path $tokenPath -ItemType Directory | Out-Null }
+            
+        # Read uploaded document and convert to byte format
+        $Contents = Get-Content -Path $document.FullName -Raw
+        $byteContents = [System.Text.Encoding]::UTF8.GetBytes($Contents)
+        
+        # Generate and secure AES-256 compliant Key and IV
+        try {
+            $keyMaterial = [AESCryptoHelper]::new()
+            $keyMaterial.DPAPISave($tokenPath)
+        } catch {
+            $prompt = "[ERROR] Failed to generate key for $($document.Name): $($_.Exception.Message)"
+            $log = $prompt
+            Write-CustomLog -LogType ERROR -Prompt $prompt -Path $errorLog -Message $log
+
+            $skippedFiles += [PSCustomObject]@{
+                FileName = $document.FullName
+                Why = "Fatal Error"
+            }
+
+            continue
+        }
+
+        # Encryption
+        try { $encrypted = $keyMaterial.Encrypt($byteContents) } 
+        catch {
+            $prompt = "[ERROR] Failed to encrypt $($document.Name): $($_.Exception.Message)"
+            $log = $prompt
+            Write-CustomLog -LogType ERROR -Prompt $prompt -Path $errorLog -Message $log
+            continue
+        }
+
+        # Save encrypted version to .crypt
+        $cryptFate = Join-Path $UploadPath ".crypt"
+        if (-not (Test-Path $cryptFate)) { New-Item -Path $cryptFate -ItemType Directory | Out-Null }
+
+        $destFile = Join-Path $cryptFate $document.Name
+        [System.IO.File]::WriteAllText($destFile, [Convert]::ToBase64String($encrypted))
+
+        # Log successful output
+        $prompt = "[SUCCESS] Encrypted $($document.Name) to secret folder"
+        $log = $prompt
+        Write-CustomLog -LogType HOST -Prompt $prompt -Path $successLog -Message $log
+
+        $encryptedFiles += [PSCustomObject]@{
+            OriginalFile = $document.FullName
+            EncryptedFile = $destFile
+            TokenPath = $tokenPath
+        }
+    }
+
+    $prompt = "Encrypted:$($encryptedFiles.Length)\nSkipped:$($skippedFiles.Length)"
+    $log = $prompt
+    Write-CustomLog -LogType VERBOSE -Prompt $prompt -Path $successLog -Message $log -TimeStamp $false
+
+    return [PSCustomObject]@{
+        Timestamp = (Get-Date)
+        TotalProcessed = $uploads.Count
+        EncryptedCount = $encryptedFiles.Count
+        SkippedCount = $skippedFiles.SkippedCount
+        EncryptedFiles = $encryptedFiles
+        SkippedFiles = $skippedFiles
+    }
+}
+
+# Exporting Protect-FolderAES for external use
+Export-ModuleMember -Function Protect-FolderAES
