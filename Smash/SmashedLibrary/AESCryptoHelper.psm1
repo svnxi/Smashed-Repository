@@ -52,12 +52,12 @@ class AESCryptoHelper : CryptoHelperBase {
     # DPAPI compliant persistence method protects and saves key-IV pair to destination.
     [void] DPAPISave([string]$destinationPath) {
         # Protect key and IV using DPAPI (CurrentUser scope)
-        try{
+        try {
             $protectedKey = [System.Security.Cryptography.ProtectedData]::Protect($this.Key, $null, 'CurrentUser')
             $protectedIV = [System.Security.Cryptography.ProtectedData]::Protect($this.IV, $null, 'CurrentUser')
         }
-        catch{
-            throw "Failed to protect AES key or iv: $_"
+        catch {
+            throw "Failed to protect AES key or IV: $($_.Exception.Message)"
         }
 
         # Save protected key and IV to disk

@@ -9,9 +9,9 @@ if (-not (Test-Path $smashedFolder)) { New-Item -Path $smashedFolder -ItemType D
 
 # Prepare storage path for protected data (better on separate drive)
 $tokenStore = Join-Path $currentDir "Secret"
-if (-not (Test-Path $tokenStore)) { New-Item -Path $tokenDir -ItemType Directory | Out-Null }
+if (-not (Test-Path $tokenStore)) { New-Item -Path $tokenStore -ItemType Directory | Out-Null }
 
-Protect-FolderAES -UploadPath $smashedFolder -PathToTokens $tokenStore
+Protect-FolderAES -PathToTokens $tokenStore -UploadPath $smashedFolder
 
 
 
